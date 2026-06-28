@@ -5,7 +5,7 @@ import type { Account } from '@/api/accounts'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { TransactionFormFields, defaultTxForm, type TxFormData } from '@/components/shared/TransactionFormFields'
-import { Plus, Trash2, Copy, CheckCircle2, XCircle } from 'lucide-react'
+import { Plus, Trash2, Copy, CheckCircle2, XCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface BulkRow { _id: string; data: TxFormData; error?: string }
@@ -33,26 +33,43 @@ const TYPE_BORDER: Record<string, string> = {
 
 export default function BulkTransactionDialog({ open, onClose, categories, accounts, onImported }: Props) {
   const [rows, setRows] = useState<BulkRow[]>(() => [mkRow(), mkRow(), mkRow()])
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<Result | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  const toggleCollapse = (id: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+
+  const collapseAll = () => setCollapsed(new Set(rows.map((r) => r._id)))
+  const expandAll = () => setCollapsed(new Set())
 
   const updateRow = (id: string, data: TxFormData) =>
     setRows((prev) => prev.map((r) => r._id === id ? { ...r, data, error: undefined } : r))
 
   const addRow = (base?: Partial<TxFormData>) => {
-    setRows((prev) => [...prev, mkRow(base)])
+    const r = mkRow(base)
+    setRows((prev) => [...prev, r])
+    setCollapsed((prev) => { const next = new Set(prev); prev.forEach((id) => next.add(id)); return next })
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
   }
 
-  const removeRow = (id: string) =>
-    setRows((prev) => prev.length > 1 ? prev.filter((r) => r._id !== id) : prev)
+  const removeRow = (id: string) => {
+    if (rows.length <= 1) return
+    setRows((prev) => prev.filter((r) => r._id !== id))
+    setCollapsed((prev) => { const next = new Set(prev); next.delete(id); return next })
+  }
 
   const duplicateRow = (row: BulkRow) => {
     const idx = rows.findIndex((r) => r._id === row._id)
+    const dup = mkRow(row.data)
     setRows((prev) => {
       const next = [...prev]
-      next.splice(idx + 1, 0, mkRow(row.data))
+      next.splice(idx + 1, 0, dup)
       return next
     })
   }
@@ -122,7 +139,14 @@ export default function BulkTransactionDialog({ open, onClose, categories, accou
         style={{ width: '85vw', maxWidth: '85vw', minHeight: '65vh' }}
       >
         <DialogHeader className="px-6 pt-5 pb-3 border-b shrink-0">
-          <DialogTitle>Input Transaksi Massal</DialogTitle>
+          <div className="flex items-center justify-between">
+            <DialogTitle>Input Transaksi Massal</DialogTitle>
+            <div className="flex items-center gap-2 mr-6">
+              <button onClick={expandAll} className="text-xs text-primary hover:underline">Buka Semua</button>
+              <span className="text-muted-foreground text-xs">·</span>
+              <button onClick={collapseAll} className="text-xs text-primary hover:underline">Ciutkan Semua</button>
+            </div>
+          </div>
           <p className="text-xs text-muted-foreground">
             {rows.length} baris · {filled} terisi nominal
           </p>
@@ -147,46 +171,66 @@ export default function BulkTransactionDialog({ open, onClose, categories, accou
 
         {/* Scrollable rows */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
-          {rows.map((row, idx) => (
-            <div
-              key={row._id}
-              className={`rounded-lg border-l-4 border border-border bg-card shadow-sm ${TYPE_BORDER[row.data.type]} ${row.error ? 'ring-1 ring-red-400' : ''}`}
-            >
-              {/* Row header */}
-              <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30 rounded-t-lg">
-                <span className="text-xs font-semibold text-muted-foreground">Transaksi {idx + 1}</span>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => duplicateRow(row)}
-                    title="Duplikat"
-                    className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Copy size={13} />
-                  </button>
-                  <button
-                    onClick={() => removeRow(row._id)}
-                    title="Hapus"
-                    className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-muted-foreground hover:text-red-500 transition-colors"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              </div>
+          {rows.map((row, idx) => {
+            const isCollapsed = collapsed.has(row._id)
+            const TYPE_LABEL: Record<string, string> = { income: 'Pemasukan', expense: 'Pengeluaran', transfer: 'Transfer' }
+            const summary = isCollapsed && row.data.amount > 0
+              ? `${TYPE_LABEL[row.data.type]} · Rp ${row.data.amount.toLocaleString('id-ID')}${row.data.description ? ` · ${row.data.description}` : ''}`
+              : null
 
-              {/* Form fields — same component as single form */}
-              <div className="px-4 py-3">
-                {row.error && (
-                  <p className="mb-2 text-xs text-red-500 font-medium">{row.error}</p>
+            return (
+              <div
+                key={row._id}
+                className={`rounded-lg border-l-4 border border-border bg-card shadow-sm ${TYPE_BORDER[row.data.type]} ${row.error ? 'ring-1 ring-red-400' : ''}`}
+              >
+                {/* Clickable header */}
+                <div
+                  className="flex items-center justify-between px-4 py-2.5 bg-muted/30 rounded-t-lg cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                  onClick={() => toggleCollapse(row._id)}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isCollapsed
+                      ? <ChevronRight size={14} className="text-muted-foreground shrink-0" />
+                      : <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
+                    <span className="text-xs font-semibold text-muted-foreground shrink-0">Transaksi {idx + 1}</span>
+                    {summary && <span className="text-xs text-muted-foreground truncate">{summary}</span>}
+                    {row.error && <span className="text-xs text-red-500 font-medium shrink-0">⚠ {row.error}</span>}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => duplicateRow(row)}
+                      title="Duplikat"
+                      className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <Copy size={13} />
+                    </button>
+                    <button
+                      onClick={() => removeRow(row._id)}
+                      title="Hapus"
+                      className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-muted-foreground hover:text-red-500 transition-colors"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Collapsible body */}
+                {!isCollapsed && (
+                  <div className="px-4 py-3">
+                    {row.error && (
+                      <p className="mb-2 text-xs text-red-500 font-medium">{row.error}</p>
+                    )}
+                    <TransactionFormFields
+                      value={row.data}
+                      onChange={(data) => updateRow(row._id, data)}
+                      categories={categories}
+                      accounts={accounts}
+                    />
+                  </div>
                 )}
-                <TransactionFormFields
-                  value={row.data}
-                  onChange={(data) => updateRow(row._id, data)}
-                  categories={categories}
-                  accounts={accounts}
-                />
               </div>
-            </div>
-          ))}
+            )
+          })}
           <div ref={bottomRef} />
         </div>
 
