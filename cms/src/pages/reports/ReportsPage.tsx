@@ -8,10 +8,11 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import PageHeader from '@/components/shared/PageHeader'
-import { TrendingUp, TrendingDown, Minus, AlertTriangle, Trophy, GitCompare, PlusCircle, X, CalendarDays } from 'lucide-react'
+import { TrendingUp, TrendingDown, Minus, AlertTriangle, Trophy, GitCompare, PlusCircle, X, CalendarDays, BarChart2, LineChart as LineChartIcon } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
+  AreaChart, Area, LineChart, Line, CartesianGrid,
 } from 'recharts'
 
 const formatRupiah = (n: number) =>
@@ -24,8 +25,17 @@ function formatShort(n: number) {
   return String(n)
 }
 
+function monthOffset(month: number, year: number, offset: number) {
+  let m = month + offset
+  let y = year
+  while (m <= 0) { m += 12; y-- }
+  while (m > 12) { m -= 12; y++ }
+  return { month: m, year: y }
+}
+
 const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']
 const COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316']
+const CAT_TREND_COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#8b5cf6']
 
 interface Summary { income: number; expense: number; balance: number; transaction_count: number; avg_daily_expense: number }
 interface CategoryItem { category: { id: string; name: string; icon: string; color: string }; amount: number; percentage: number }
@@ -50,6 +60,15 @@ export default function ReportsPage() {
   const [insights, setInsights] = useState<Insights | null>(null)
   const [loading, setLoading] = useState(true)
 
+  // Monthly transactions — shared by daily chart and weekly section
+  const [monthTxs, setMonthTxs] = useState<Transaction[]>([])
+  const [monthTxsLoading, setMonthTxsLoading] = useState(false)
+
+  // Category trend (last 3 months)
+  const [showCategoryTrend, setShowCategoryTrend] = useState(false)
+  const [categoryTrendData, setCategoryTrendData] = useState<CategoryItem[][]>([])
+  const [categoryTrendLoading, setCategoryTrendLoading] = useState(false)
+
   // — Comparison state —
   const prevMonth = month > 1 ? month - 1 : 12
   const prevYear = month > 1 ? year : year - 1
@@ -61,6 +80,118 @@ export default function ReportsPage() {
   const [compareData, setCompareData] = useState<(Summary | null)[]>([])
   const [compareLoading, setCompareLoading] = useState(false)
 
+  // — Weekly section toggle —
+  const [showWeekly, setShowWeekly] = useState(false)
+
+  // Main data fetch
+  useEffect(() => {
+    setLoading(true)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const daysInMonth = new Date(year, month, 0).getDate()
+    const startDate = `${year}-${pad(month)}-01`
+    const endDate = `${year}-${pad(month)}-${pad(daysInMonth)}`
+
+    setMonthTxsLoading(true)
+
+    Promise.all([
+      getMonthlySummary(month, year),
+      getCategoryBreakdown(breakdownType, month, year),
+      getMonthlyTrend(),
+      getInsights(month, year),
+      listTransactions({ start_date: startDate, end_date: endDate, limit: 500 }),
+    ])
+      .then(([s, b, t, ins, txs]) => {
+        setSummary(s.data.data)
+        setBreakdown(b.data.data ?? [])
+        setTrend((t.data.data ?? []).slice(-6))
+        setInsights(ins.data.data)
+        setMonthTxs(txs.data.data.transactions ?? [])
+      })
+      .catch(() => {})
+      .finally(() => {
+        setLoading(false)
+        setMonthTxsLoading(false)
+      })
+  }, [month, year, breakdownType])
+
+  // Category trend fetch (on demand)
+  const categoryTrendMonths = useMemo(
+    () => [-2, -1, 0].map((o) => {
+      const { month: m, year: y } = monthOffset(month, year, o)
+      return { label: `${monthNames[m - 1]} '${String(y).slice(-2)}`, month: m, year: y }
+    }),
+    [month, year],
+  )
+
+  useEffect(() => {
+    if (!showCategoryTrend) return
+    setCategoryTrendLoading(true)
+    Promise.all(
+      categoryTrendMonths.map(({ month: m, year: y }) => getCategoryBreakdown(breakdownType, m, y))
+    )
+      .then((results) => setCategoryTrendData(results.map((r) => r.data.data ?? [])))
+      .catch(() => {})
+      .finally(() => setCategoryTrendLoading(false))
+  }, [showCategoryTrend, month, year, breakdownType, categoryTrendMonths])
+
+  // Category trend chart data
+  const categoryTrendChartData = useMemo(() => {
+    if (categoryTrendData.length !== 3) return []
+    const top5 = breakdown.slice(0, 5).map((b) => b.category.id)
+    return categoryTrendMonths.map(({ label }, mi) => {
+      const entry: Record<string, number | string> = { month: label }
+      top5.forEach((id) => {
+        const found = categoryTrendData[mi]?.find((b) => b.category.id === id)
+        const cat = breakdown.find((b) => b.category.id === id)
+        const name = cat ? `${cat.category.icon} ${cat.category.name}` : id
+        entry[name] = found?.amount ?? 0
+      })
+      return entry
+    })
+  }, [categoryTrendData, breakdown, categoryTrendMonths])
+
+  const top5CategoryNames = useMemo(
+    () => breakdown.slice(0, 5).map((b) => `${b.category.icon} ${b.category.name}`),
+    [breakdown],
+  )
+
+  // Daily chart data
+  const dailyData = useMemo(() => {
+    const daysInMonth = new Date(year, month, 0).getDate()
+    const map: Record<number, { income: number; expense: number }> = {}
+    for (let d = 1; d <= daysInMonth; d++) map[d] = { income: 0, expense: 0 }
+    for (const tx of monthTxs) {
+      const d = new Date(tx.date).getDate()
+      if (tx.type === 'income') map[d].income += tx.amount
+      if (tx.type === 'expense') map[d].expense += tx.amount
+    }
+    return Array.from({ length: daysInMonth }, (_, i) => ({
+      day: String(i + 1),
+      Pemasukan: map[i + 1].income,
+      Pengeluaran: map[i + 1].expense,
+    }))
+  }, [monthTxs, month, year])
+
+  // Weekly data (uses monthTxs)
+  const weeklyData = useMemo(() => {
+    const daysInMonth = new Date(year, month, 0).getDate()
+    const weeks: { label: string; shortLabel: string; start: number; end: number }[] = []
+    for (let s = 1; s <= daysInMonth; s += 7) {
+      const e = Math.min(s + 6, daysInMonth)
+      weeks.push({ label: `Minggu ${weeks.length + 1}`, shortLabel: `Mg ${weeks.length + 1}`, start: s, end: e })
+    }
+    return weeks.map(({ label, shortLabel, start, end }) => {
+      const slice = monthTxs.filter((t) => {
+        const d = new Date(t.date).getDate()
+        return d >= start && d <= end
+      })
+      const income = slice.filter((t) => t.type === 'income').reduce((a, t) => a + t.amount, 0)
+      const expense = slice.filter((t) => t.type === 'expense').reduce((a, t) => a + t.amount, 0)
+      return { label, shortLabel, dateRange: `${start}–${end} ${monthNames[month - 1]}`, income, expense, net: income - expense, count: slice.length }
+    })
+  }, [monthTxs, month, year])
+
+  // Compare
   useEffect(() => {
     if (!showCompare) return
     setCompareLoading(true)
@@ -111,60 +242,6 @@ export default function ReportsPage() {
     { label: 'Jml Transaksi', get: (s) => String(s.transaction_count), highlight: 'none' },
   ]
 
-  // — Weekly breakdown state —
-  const [showWeekly, setShowWeekly] = useState(false)
-  const [weekTxs, setWeekTxs] = useState<Transaction[]>([])
-  const [weekLoading, setWeekLoading] = useState(false)
-
-  useEffect(() => {
-    if (!showWeekly) return
-    const pad = (n: number) => String(n).padStart(2, '0')
-    const daysInMonth = new Date(year, month, 0).getDate()
-    const start = `${year}-${pad(month)}-01`
-    const end = `${year}-${pad(month)}-${pad(daysInMonth)}`
-    setWeekLoading(true)
-    listTransactions({ start_date: start, end_date: end, limit: 500 })
-      .then((r) => setWeekTxs(r.data.data.transactions ?? []))
-      .catch(() => {})
-      .finally(() => setWeekLoading(false))
-  }, [showWeekly, month, year])
-
-  const weeklyData = useMemo(() => {
-    const daysInMonth = new Date(year, month, 0).getDate()
-    const weeks: { label: string; shortLabel: string; start: number; end: number }[] = []
-    for (let s = 1; s <= daysInMonth; s += 7) {
-      const e = Math.min(s + 6, daysInMonth)
-      weeks.push({ label: `Minggu ${weeks.length + 1}`, shortLabel: `Mg ${weeks.length + 1}`, start: s, end: e })
-    }
-    return weeks.map(({ label, shortLabel, start, end }) => {
-      const slice = weekTxs.filter((t) => {
-        const d = new Date(t.date).getDate()
-        return d >= start && d <= end
-      })
-      const income = slice.filter((t) => t.type === 'income').reduce((a, t) => a + t.amount, 0)
-      const expense = slice.filter((t) => t.type === 'expense').reduce((a, t) => a + t.amount, 0)
-      return { label, shortLabel, dateRange: `${start}–${end} ${monthNames[month - 1]}`, income, expense, net: income - expense, count: slice.length }
-    })
-  }, [weekTxs, month, year])
-
-  useEffect(() => {
-    setLoading(true)
-    Promise.all([
-      getMonthlySummary(month, year),
-      getCategoryBreakdown(breakdownType, month, year),
-      getMonthlyTrend(),
-      getInsights(month, year),
-    ])
-      .then(([s, b, t, ins]) => {
-        setSummary(s.data.data)
-        setBreakdown(b.data.data ?? [])
-        setTrend((t.data.data ?? []).slice(-6))
-        setInsights(ins.data.data)
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [month, year, breakdownType])
-
   const years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1]
   const mom = insights?.month_over_month
   const savingsRate = insights?.savings_rate ?? null
@@ -183,6 +260,8 @@ export default function ReportsPage() {
 
   const momExpColor = mom && mom.expense_change_percent < 0 ? 'text-green-600' : 'text-red-600'
   const momIncColor = mom && mom.income_change_percent > 0 ? 'text-green-600' : 'text-red-600'
+
+  const hasDailyData = dailyData.some((d) => d.Pemasukan > 0 || d.Pengeluaran > 0)
 
   return (
     <div className="space-y-6">
@@ -344,7 +423,7 @@ export default function ReportsPage() {
                 <BarChart data={trendData} barCategoryGap="30%">
                   <XAxis dataKey="name" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                   <YAxis tickFormatter={formatShort} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
-                  <Tooltip formatter={(v: number) => formatRupiah(v)} contentStyle={{ fontSize: 12 }} />
+                  <Tooltip formatter={(v) => formatRupiah(Number(v))} contentStyle={{ fontSize: 12 }} />
                   <Bar dataKey="Pemasukan" fill="#10b981" radius={[3,3,0,0]} />
                   <Bar dataKey="Pengeluaran" fill="#ef4444" radius={[3,3,0,0]} />
                 </BarChart>
@@ -378,7 +457,7 @@ export default function ReportsPage() {
                   <Pie data={pieData} cx="40%" cy="50%" innerRadius={52} outerRadius={80} dataKey="value" paddingAngle={2}>
                     {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Pie>
-                  <Tooltip formatter={(v: number, _n, p) => [`${formatRupiah(v)} (${p.payload.pct}%)`, p.payload.name]} contentStyle={{ fontSize: 12 }} />
+                  <Tooltip formatter={(v, _n, p) => [`${formatRupiah(Number(v))} (${p.payload.pct}%)`, p.payload.name]} contentStyle={{ fontSize: 12 }} />
                   <Legend layout="vertical" align="right" verticalAlign="middle" iconType="circle" iconSize={8}
                     formatter={(v) => <span style={{ fontSize: 11 }}>{v}</span>} />
                 </PieChart>
@@ -422,6 +501,185 @@ export default function ReportsPage() {
         </CardContent>
       </Card>
 
+      {/* ── Tren Per Kategori ── */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div className="flex items-center gap-2">
+            <LineChartIcon size={16} className="text-muted-foreground" />
+            <CardTitle className="text-sm font-semibold">
+              Tren {breakdownType === 'expense' ? 'Pengeluaran' : 'Pemasukan'} Per Kategori — 3 Bulan Terakhir
+            </CardTitle>
+          </div>
+          <Button
+            variant={showCategoryTrend ? 'default' : 'outline'}
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setShowCategoryTrend((v) => !v)}
+          >
+            {showCategoryTrend ? 'Tutup' : 'Tampilkan'}
+          </Button>
+        </CardHeader>
+
+        {showCategoryTrend && (
+          <CardContent className="space-y-5">
+            {categoryTrendLoading ? (
+              <Skeleton className="h-56 w-full" />
+            ) : categoryTrendChartData.length === 0 || top5CategoryNames.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">Tidak ada data</p>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={240}>
+                  <LineChart data={categoryTrendChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.06} />
+                    <XAxis dataKey="month" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={formatShort} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
+                    <Tooltip formatter={(v) => formatRupiah(Number(v))} contentStyle={{ fontSize: 12 }} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    {top5CategoryNames.map((name, i) => (
+                      <Line
+                        key={name}
+                        type="monotone"
+                        dataKey={name}
+                        stroke={CAT_TREND_COLORS[i % CAT_TREND_COLORS.length]}
+                        strokeWidth={2}
+                        dot={{ r: 4 }}
+                        activeDot={{ r: 6 }}
+                      />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+
+                {/* Delta table: perubahan dari 2 bulan lalu ke bulan ini */}
+                <div className="overflow-x-auto rounded-lg border">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/40">
+                        <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Kategori</th>
+                        {categoryTrendMonths.map(({ label }) => (
+                          <th key={label} className="px-4 py-2.5 text-right text-xs font-medium text-muted-foreground">{label}</th>
+                        ))}
+                        <th className="px-4 py-2.5 text-right text-xs font-medium text-muted-foreground">Δ vs 2 Bln Lalu</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {top5CategoryNames.map((name, ci) => {
+                        const vals = categoryTrendMonths.map((_, mi) => {
+                          const entry = categoryTrendChartData[mi]
+                          return entry ? (entry[name] as number ?? 0) : 0
+                        })
+                        const delta = vals[2] - vals[0]
+                        const deltaPct = vals[0] !== 0 ? (delta / vals[0]) * 100 : 0
+                        const isUp = delta > 0
+                        const isExpense = breakdownType === 'expense'
+                        const deltaColor = Math.abs(deltaPct) < 1 ? 'text-muted-foreground'
+                          : (isExpense ? (isUp ? 'text-red-500' : 'text-green-600')
+                            : (isUp ? 'text-green-600' : 'text-red-500'))
+                        return (
+                          <tr key={name} className="border-b last:border-0 hover:bg-muted/20 transition-colors">
+                            <td className="px-4 py-2.5 text-xs font-medium">
+                              <span className="flex items-center gap-1">
+                                <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: CAT_TREND_COLORS[ci % CAT_TREND_COLORS.length] }} />
+                                {name}
+                              </span>
+                            </td>
+                            {vals.map((v, mi) => (
+                              <td key={mi} className="px-4 py-2.5 text-right text-xs tabular-nums">
+                                {v > 0 ? formatRupiah(v) : <span className="text-muted-foreground">—</span>}
+                              </td>
+                            ))}
+                            <td className={`px-4 py-2.5 text-right text-xs font-semibold tabular-nums ${deltaColor}`}>
+                              {Math.abs(deltaPct) < 1 ? '→ stabil'
+                                : `${isUp ? '▲' : '▼'} ${Math.abs(deltaPct).toFixed(0)}%`}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </CardContent>
+        )}
+      </Card>
+
+      {/* ── Grafik Pengeluaran Harian ── */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div className="flex items-center gap-2">
+            <BarChart2 size={16} className="text-muted-foreground" />
+            <CardTitle className="text-sm font-semibold">
+              Arus Kas Harian — {monthNames[month - 1]} {year}
+            </CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {monthTxsLoading ? (
+            <Skeleton className="h-52 w-full" />
+          ) : !hasDailyData ? (
+            <p className="text-sm text-muted-foreground text-center py-10">Tidak ada transaksi bulan ini</p>
+          ) : (
+            <div className="space-y-4">
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart data={dailyData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                  <defs>
+                    <linearGradient id="gradIncome" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
+                    </linearGradient>
+                    <linearGradient id="gradExpense" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#ef4444" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.06} />
+                  <XAxis
+                    dataKey="day"
+                    tick={{ fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval={dailyData.length > 20 ? 4 : 1}
+                  />
+                  <YAxis tickFormatter={formatShort} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
+                  <Tooltip
+                    formatter={(v, name) => [formatRupiah(Number(v)), name]}
+                    labelFormatter={(l) => `Tgl ${l}`}
+                    contentStyle={{ fontSize: 12 }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Area type="monotone" dataKey="Pemasukan" stroke="#10b981" strokeWidth={2} fill="url(#gradIncome)" dot={false} activeDot={{ r: 4 }} />
+                  <Area type="monotone" dataKey="Pengeluaran" stroke="#ef4444" strokeWidth={2} fill="url(#gradExpense)" dot={false} activeDot={{ r: 4 }} />
+                </AreaChart>
+              </ResponsiveContainer>
+
+              {/* Peak days */}
+              {(() => {
+                const peakExp = dailyData.reduce((a, b) => a.Pengeluaran >= b.Pengeluaran ? a : b)
+                const peakInc = dailyData.reduce((a, b) => a.Pemasukan >= b.Pemasukan ? a : b)
+                return (
+                  <div className="grid grid-cols-2 gap-3">
+                    {peakExp.Pengeluaran > 0 && (
+                      <div className="rounded-lg border bg-red-50 dark:bg-red-950/20 border-red-100 dark:border-red-900 px-4 py-3">
+                        <p className="text-[10px] text-red-400 font-medium uppercase tracking-wide mb-1">Pengeluaran Tertinggi</p>
+                        <p className="text-sm font-bold text-red-600">Tgl {peakExp.day}</p>
+                        <p className="text-xs text-red-500">{formatRupiah(peakExp.Pengeluaran)}</p>
+                      </div>
+                    )}
+                    {peakInc.Pemasukan > 0 && (
+                      <div className="rounded-lg border bg-green-50 dark:bg-green-950/20 border-green-100 dark:border-green-900 px-4 py-3">
+                        <p className="text-[10px] text-green-500 font-medium uppercase tracking-wide mb-1">Pemasukan Tertinggi</p>
+                        <p className="text-sm font-bold text-green-600">Tgl {peakInc.day}</p>
+                        <p className="text-xs text-green-600">{formatRupiah(peakInc.Pemasukan)}</p>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* ── Weekly Breakdown Section ── */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
@@ -441,25 +699,23 @@ export default function ReportsPage() {
 
         {showWeekly && (
           <CardContent className="space-y-5">
-            {weekLoading ? (
+            {monthTxsLoading ? (
               <Skeleton className="h-52 w-full" />
             ) : weeklyData.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">Tidak ada transaksi bulan ini</p>
             ) : (
               <>
-                {/* Bar chart */}
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={weeklyData.map((w) => ({ name: w.shortLabel, Pemasukan: w.income, Pengeluaran: w.expense }))} barCategoryGap="30%" barGap={3}>
                     <XAxis dataKey="name" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                     <YAxis tickFormatter={formatShort} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
-                    <Tooltip formatter={(v: number) => formatRupiah(v)} contentStyle={{ fontSize: 12 }} />
+                    <Tooltip formatter={(v) => formatRupiah(Number(v))} contentStyle={{ fontSize: 12 }} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     <Bar dataKey="Pemasukan" fill="#10b981" radius={[3, 3, 0, 0]} />
                     <Bar dataKey="Pengeluaran" fill="#ef4444" radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
 
-                {/* Summary table */}
                 <div className="overflow-x-auto rounded-lg border">
                   <table className="w-full text-sm">
                     <thead>
@@ -516,7 +772,6 @@ export default function ReportsPage() {
                   </table>
                 </div>
 
-                {/* Worst/best week highlights */}
                 {weeklyData.some((w) => w.expense > 0) && (
                   <div className="grid grid-cols-2 gap-3">
                     {(() => {
@@ -567,7 +822,6 @@ export default function ReportsPage() {
 
         {showCompare && (
           <CardContent className="space-y-5">
-            {/* Month slot pickers */}
             <div className="flex flex-wrap items-end gap-3">
               {compareSlots.map((slot, i) => (
                 <div key={i} className="flex items-end gap-1.5">
@@ -614,15 +868,11 @@ export default function ReportsPage() {
               <Skeleton className="h-56 w-full" />
             ) : compareData.length === compareSlots.length ? (
               <>
-                {/* Grouped bar chart */}
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={compareChartData} barCategoryGap="25%" barGap={4}>
                     <XAxis dataKey="metric" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                     <YAxis tickFormatter={formatShort} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
-                    <Tooltip
-                      formatter={(v: number) => formatRupiah(v)}
-                      contentStyle={{ fontSize: 12 }}
-                    />
+                    <Tooltip formatter={(v) => formatRupiah(Number(v))} contentStyle={{ fontSize: 12 }} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     {compareLabels.map((label, i) => (
                       <Bar key={label} dataKey={label} fill={COMPARE_COLORS[i]} radius={[3, 3, 0, 0]} />
@@ -630,7 +880,6 @@ export default function ReportsPage() {
                   </BarChart>
                 </ResponsiveContainer>
 
-                {/* Comparison table */}
                 <div className="overflow-x-auto rounded-lg border">
                   <table className="w-full text-sm">
                     <thead>
@@ -684,7 +933,6 @@ export default function ReportsPage() {
                   </table>
                 </div>
 
-                {/* Delta badges */}
                 {compareData.length === 2 && compareData[0] && compareData[1] && (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {[
