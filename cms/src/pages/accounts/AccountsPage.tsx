@@ -36,6 +36,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import PageHeader from '@/components/shared/PageHeader'
+import IconPicker from '@/components/shared/IconPicker'
 import { Plus, Pencil, Trash2, DollarSign } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -258,11 +259,10 @@ export default function AccountsPage() {
               </Select>
             </div>
             <div className="space-y-1">
-              <Label>Icon (emoji)</Label>
-              <Input
+              <Label>Icon</Label>
+              <IconPicker
                 value={form.icon ?? ''}
-                onChange={(e) => setForm((f) => ({ ...f, icon: e.target.value }))}
-                placeholder="🏦"
+                onChange={(icon) => setForm((f) => ({ ...f, icon }))}
               />
             </div>
             <div className="space-y-1">

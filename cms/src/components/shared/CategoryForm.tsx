@@ -1,4 +1,3 @@
-import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -8,14 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-
-export const EMOJI_OPTIONS = [
-  '🍔','🍜','🍕','🍱','☕','🛒','🏠','🚗','🚌','✈️',
-  '💊','🏥','🎬','🎮','🎵','📚','🎓','💼','💻','📱',
-  '💳','💰','💸','📈','🏦','⭐','🎁','💡','🔧','🧾',
-  '📄','📦','🛍️','👗','⚡','💧','🌐','🏋️','🐾','🌿',
-  '🎨','✂️','🧹','🚀','🔑','🎯','🏆','❤️','🌟','➕',
-]
+import IconPicker from '@/components/shared/IconPicker'
 
 export interface CategoryFormValue {
   name: string
@@ -69,29 +61,7 @@ export default function CategoryForm({ value, onChange, lockType }: Props) {
 
       <div className="space-y-1">
         <Label>Icon</Label>
-        <div className="flex items-center gap-2 mb-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg border text-xl">
-            {value.icon || '?'}
-          </span>
-          <span className="text-sm text-muted-foreground">
-            {value.icon ? 'Terpilih' : 'Belum dipilih'}
-          </span>
-        </div>
-        <div className="grid grid-cols-10 gap-1 rounded-lg border p-2 max-h-32 overflow-y-auto">
-          {EMOJI_OPTIONS.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              onClick={() => set({ icon: emoji })}
-              className={cn(
-                'flex h-8 w-8 items-center justify-center rounded text-lg hover:bg-accent',
-                value.icon === emoji && 'bg-primary/20 ring-1 ring-primary'
-              )}
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
+        <IconPicker value={value.icon} onChange={(icon) => set({ icon })} />
       </div>
     </div>
   )
