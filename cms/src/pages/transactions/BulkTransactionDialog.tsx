@@ -173,10 +173,15 @@ export default function BulkTransactionDialog({ open, onClose, categories, accou
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
           {rows.map((row, idx) => {
             const isCollapsed = collapsed.has(row._id)
+            const d = row.data
+            const cat = categories.find((c) => c.id === d.category_id)
+            const acc = accounts.find((a) => a.id === d.account_id)
+            const toAcc = accounts.find((a) => a.id === d.to_account_id)
             const TYPE_LABEL: Record<string, string> = { income: 'Pemasukan', expense: 'Pengeluaran', transfer: 'Transfer' }
-            const summary = isCollapsed && row.data.amount > 0
-              ? `${TYPE_LABEL[row.data.type]} · Rp ${row.data.amount.toLocaleString('id-ID')}${row.data.description ? ` · ${row.data.description}` : ''}`
-              : null
+            const TYPE_COLOR: Record<string, string> = { income: 'text-green-600', expense: 'text-red-500', transfer: 'text-blue-500' }
+            const fmtDate = d.date
+              ? new Date(d.date + 'T00:00:00').toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+              : '—'
 
             return (
               <div
@@ -188,13 +193,70 @@ export default function BulkTransactionDialog({ open, onClose, categories, accou
                   className="flex items-center justify-between px-4 py-2.5 bg-muted/30 rounded-t-lg cursor-pointer select-none hover:bg-muted/50 transition-colors"
                   onClick={() => toggleCollapse(row._id)}
                 >
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
                     {isCollapsed
                       ? <ChevronRight size={14} className="text-muted-foreground shrink-0" />
                       : <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
-                    <span className="text-xs font-semibold text-muted-foreground shrink-0">Transaksi {idx + 1}</span>
-                    {summary && <span className="text-xs text-muted-foreground truncate">{summary}</span>}
-                    {row.error && <span className="text-xs text-red-500 font-medium shrink-0">⚠ {row.error}</span>}
+                    <span className="text-xs font-semibold text-muted-foreground shrink-0">#{idx + 1}</span>
+
+                    {isCollapsed ? (
+                      <>
+                        {/* Date */}
+                        <span className="text-xs text-muted-foreground shrink-0">{fmtDate}</span>
+                        <span className="text-muted-foreground text-xs">·</span>
+
+                        {/* Type */}
+                        <span className={`text-xs font-medium shrink-0 ${TYPE_COLOR[d.type]}`}>
+                          {TYPE_LABEL[d.type]}
+                        </span>
+
+                        {/* Category */}
+                        {cat && (
+                          <>
+                            <span className="text-muted-foreground text-xs">·</span>
+                            <span className="text-xs shrink-0">{cat.icon} {cat.name}</span>
+                          </>
+                        )}
+
+                        {/* Account */}
+                        {acc && (
+                          <>
+                            <span className="text-muted-foreground text-xs">·</span>
+                            <span className="text-xs text-muted-foreground shrink-0">{acc.name}</span>
+                          </>
+                        )}
+
+                        {/* Transfer arrow */}
+                        {toAcc && (
+                          <>
+                            <span className="text-muted-foreground text-xs">→</span>
+                            <span className="text-xs text-muted-foreground shrink-0">{toAcc.name}</span>
+                          </>
+                        )}
+
+                        {/* Amount */}
+                        {d.amount > 0 && (
+                          <>
+                            <span className="text-muted-foreground text-xs">·</span>
+                            <span className={`text-xs font-semibold tabular-nums shrink-0 ${TYPE_COLOR[d.type]}`}>
+                              Rp {d.amount.toLocaleString('id-ID')}
+                            </span>
+                          </>
+                        )}
+
+                        {/* Description */}
+                        {d.description && (
+                          <>
+                            <span className="text-muted-foreground text-xs">·</span>
+                            <span className="text-xs text-muted-foreground italic truncate max-w-[160px]">{d.description}</span>
+                          </>
+                        )}
+
+                        {row.error && <span className="text-xs text-red-500 font-medium shrink-0">⚠ {row.error}</span>}
+                      </>
+                    ) : (
+                      row.error && <span className="text-xs text-red-500 font-medium shrink-0">⚠ {row.error}</span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <button
