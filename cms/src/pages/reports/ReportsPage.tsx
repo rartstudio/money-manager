@@ -162,22 +162,22 @@ export default function ReportsPage() {
     return result
   }, [categoryTrendData])
 
-  // Category trend chart data — only selected categories
+  // Category trend chart data — keyed by id to avoid conflicts with duplicate names
   const categoryTrendChartData = useMemo(() => {
     if (categoryTrendData.length !== 3) return []
     const activeCats = allTrendCategories.filter((c) => selectedCatIds.has(c.id))
     return categoryTrendMonths.map(({ label }, mi) => {
       const entry: Record<string, number | string> = { month: label }
-      activeCats.forEach(({ id, name }) => {
+      activeCats.forEach(({ id }) => {
         const found = categoryTrendData[mi]?.find((b) => b.category.id === id)
-        entry[name] = found?.amount ?? 0
+        entry[id] = found?.amount ?? 0
       })
       return entry
     })
   }, [categoryTrendData, allTrendCategories, selectedCatIds, categoryTrendMonths])
 
-  const activeCategoryNames = useMemo(
-    () => allTrendCategories.filter((c) => selectedCatIds.has(c.id)).map((c) => c.name),
+  const activeCategories = useMemo(
+    () => allTrendCategories.filter((c) => selectedCatIds.has(c.id)),
     [allTrendCategories, selectedCatIds],
   )
 
@@ -575,9 +575,9 @@ export default function ReportsPage() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {allTrendCategories.map((cat, i) => {
+                    {allTrendCategories.map((cat, idx) => {
                       const checked = selectedCatIds.has(cat.id)
-                      const color = CAT_TREND_COLORS[i % CAT_TREND_COLORS.length]
+                      const color = CAT_TREND_COLORS[idx % CAT_TREND_COLORS.length]
                       return (
                         <button
                           key={cat.id}
@@ -598,7 +598,7 @@ export default function ReportsPage() {
                         >
                           <span
                             className="inline-block w-2 h-2 rounded-full shrink-0"
-                            style={{ background: color, opacity: checked ? 0.4 : 1 }}
+                            style={{ background: color, opacity: checked ? 0.5 : 1 }}
                           />
                           {cat.name}
                         </button>
@@ -607,7 +607,7 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                {activeCategoryNames.length === 0 ? (
+                {activeCategories.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-6">Pilih minimal 1 kategori</p>
                 ) : (
                   <>
@@ -618,13 +618,14 @@ export default function ReportsPage() {
                         <YAxis tickFormatter={formatShort} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
                         <Tooltip formatter={(v) => formatRupiah(Number(v))} contentStyle={{ fontSize: 12 }} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
-                        {activeCategoryNames.map((name) => {
-                          const idx = allTrendCategories.findIndex((c) => c.name === name)
+                        {activeCategories.map((cat) => {
+                          const idx = allTrendCategories.findIndex((c) => c.id === cat.id)
                           return (
                             <Line
-                              key={name}
+                              key={cat.id}
                               type="monotone"
-                              dataKey={name}
+                              dataKey={cat.id}
+                              name={cat.name}
                               stroke={CAT_TREND_COLORS[idx % CAT_TREND_COLORS.length]}
                               strokeWidth={2}
                               dot={{ r: 4 }}
@@ -648,12 +649,12 @@ export default function ReportsPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {activeCategoryNames.map((name) => {
-                            const idx = allTrendCategories.findIndex((c) => c.name === name)
+                          {activeCategories.map((cat) => {
+                            const idx = allTrendCategories.findIndex((c) => c.id === cat.id)
                             const color = CAT_TREND_COLORS[idx % CAT_TREND_COLORS.length]
                             const vals = categoryTrendMonths.map((_, mi) => {
                               const entry = categoryTrendChartData[mi]
-                              return entry ? (entry[name] as number ?? 0) : 0
+                              return entry ? (entry[cat.id] as number ?? 0) : 0
                             })
                             const delta = vals[2] - vals[0]
                             const deltaPct = vals[0] !== 0 ? (delta / vals[0]) * 100 : 0
@@ -663,11 +664,11 @@ export default function ReportsPage() {
                               : (isExpense ? (isUp ? 'text-red-500' : 'text-green-600')
                                 : (isUp ? 'text-green-600' : 'text-red-500'))
                             return (
-                              <tr key={name} className="border-b last:border-0 hover:bg-muted/20 transition-colors">
+                              <tr key={cat.id} className="border-b last:border-0 hover:bg-muted/20 transition-colors">
                                 <td className="px-4 py-2.5 text-xs font-medium">
                                   <span className="flex items-center gap-1.5">
                                     <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
-                                    {name}
+                                    {cat.name}
                                   </span>
                                 </td>
                                 {vals.map((v, mi) => (
