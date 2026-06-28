@@ -35,7 +35,11 @@ function monthOffset(month: number, year: number, offset: number) {
 
 const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']
 const COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316']
-const CAT_TREND_COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#8b5cf6']
+const CAT_TREND_COLORS = [
+  '#6366f1','#f59e0b','#10b981','#ef4444','#8b5cf6',
+  '#ec4899','#14b8a6','#f97316','#84cc16','#0ea5e9',
+  '#a855f7','#d946ef','#06b6d4','#78716c','#64748b',
+]
 
 interface Summary { income: number; expense: number; balance: number; transaction_count: number; avg_daily_expense: number }
 interface CategoryItem { category: { id: string; name: string; icon: string; color: string }; amount: number; percentage: number }
@@ -68,6 +72,7 @@ export default function ReportsPage() {
   const [showCategoryTrend, setShowCategoryTrend] = useState(false)
   const [categoryTrendData, setCategoryTrendData] = useState<CategoryItem[][]>([])
   const [categoryTrendLoading, setCategoryTrendLoading] = useState(false)
+  const [selectedCatIds, setSelectedCatIds] = useState<Set<string>>(new Set())
 
   // — Comparison state —
   const prevMonth = month > 1 ? month - 1 : 12
@@ -129,30 +134,51 @@ export default function ReportsPage() {
     Promise.all(
       categoryTrendMonths.map(({ month: m, year: y }) => getCategoryBreakdown(breakdownType, m, y))
     )
-      .then((results) => setCategoryTrendData(results.map((r) => r.data.data ?? [])))
+      .then((results) => {
+        const allData = results.map((r) => r.data.data ?? [])
+        setCategoryTrendData(allData)
+        // collect all unique category ids across all months
+        const allIds = new Set<string>()
+        allData.forEach((month) => month.forEach((b: CategoryItem) => allIds.add(b.category.id)))
+        setSelectedCatIds(allIds)
+      })
       .catch(() => {})
       .finally(() => setCategoryTrendLoading(false))
   }, [showCategoryTrend, month, year, breakdownType, categoryTrendMonths])
 
-  // Category trend chart data
+  // All categories across all 3 trend months (union), preserving order by current month first
+  const allTrendCategories = useMemo(() => {
+    const seen = new Set<string>()
+    const result: { id: string; name: string }[] = []
+    // current month first, then fill from other months
+    ;[...categoryTrendData].reverse().forEach((monthData) => {
+      monthData.forEach((b) => {
+        if (!seen.has(b.category.id)) {
+          seen.add(b.category.id)
+          result.unshift({ id: b.category.id, name: `${b.category.icon} ${b.category.name}` })
+        }
+      })
+    })
+    return result
+  }, [categoryTrendData])
+
+  // Category trend chart data — only selected categories
   const categoryTrendChartData = useMemo(() => {
     if (categoryTrendData.length !== 3) return []
-    const top5 = breakdown.slice(0, 5).map((b) => b.category.id)
+    const activeCats = allTrendCategories.filter((c) => selectedCatIds.has(c.id))
     return categoryTrendMonths.map(({ label }, mi) => {
       const entry: Record<string, number | string> = { month: label }
-      top5.forEach((id) => {
+      activeCats.forEach(({ id, name }) => {
         const found = categoryTrendData[mi]?.find((b) => b.category.id === id)
-        const cat = breakdown.find((b) => b.category.id === id)
-        const name = cat ? `${cat.category.icon} ${cat.category.name}` : id
         entry[name] = found?.amount ?? 0
       })
       return entry
     })
-  }, [categoryTrendData, breakdown, categoryTrendMonths])
+  }, [categoryTrendData, allTrendCategories, selectedCatIds, categoryTrendMonths])
 
-  const top5CategoryNames = useMemo(
-    () => breakdown.slice(0, 5).map((b) => `${b.category.icon} ${b.category.name}`),
-    [breakdown],
+  const activeCategoryNames = useMemo(
+    () => allTrendCategories.filter((c) => selectedCatIds.has(c.id)).map((c) => c.name),
+    [allTrendCategories, selectedCatIds],
   )
 
   // Daily chart data
@@ -524,79 +550,143 @@ export default function ReportsPage() {
           <CardContent className="space-y-5">
             {categoryTrendLoading ? (
               <Skeleton className="h-56 w-full" />
-            ) : categoryTrendChartData.length === 0 || top5CategoryNames.length === 0 ? (
+            ) : allTrendCategories.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">Tidak ada data</p>
             ) : (
               <>
-                <ResponsiveContainer width="100%" height={240}>
-                  <LineChart data={categoryTrendChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.06} />
-                    <XAxis dataKey="month" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={formatShort} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
-                    <Tooltip formatter={(v) => formatRupiah(Number(v))} contentStyle={{ fontSize: 12 }} />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
-                    {top5CategoryNames.map((name, i) => (
-                      <Line
-                        key={name}
-                        type="monotone"
-                        dataKey={name}
-                        stroke={CAT_TREND_COLORS[i % CAT_TREND_COLORS.length]}
-                        strokeWidth={2}
-                        dot={{ r: 4 }}
-                        activeDot={{ r: 6 }}
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-
-                {/* Delta table: perubahan dari 2 bulan lalu ke bulan ini */}
-                <div className="overflow-x-auto rounded-lg border">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/40">
-                        <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Kategori</th>
-                        {categoryTrendMonths.map(({ label }) => (
-                          <th key={label} className="px-4 py-2.5 text-right text-xs font-medium text-muted-foreground">{label}</th>
-                        ))}
-                        <th className="px-4 py-2.5 text-right text-xs font-medium text-muted-foreground">Δ vs 2 Bln Lalu</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {top5CategoryNames.map((name, ci) => {
-                        const vals = categoryTrendMonths.map((_, mi) => {
-                          const entry = categoryTrendChartData[mi]
-                          return entry ? (entry[name] as number ?? 0) : 0
-                        })
-                        const delta = vals[2] - vals[0]
-                        const deltaPct = vals[0] !== 0 ? (delta / vals[0]) * 100 : 0
-                        const isUp = delta > 0
-                        const isExpense = breakdownType === 'expense'
-                        const deltaColor = Math.abs(deltaPct) < 1 ? 'text-muted-foreground'
-                          : (isExpense ? (isUp ? 'text-red-500' : 'text-green-600')
-                            : (isUp ? 'text-green-600' : 'text-red-500'))
-                        return (
-                          <tr key={name} className="border-b last:border-0 hover:bg-muted/20 transition-colors">
-                            <td className="px-4 py-2.5 text-xs font-medium">
-                              <span className="flex items-center gap-1">
-                                <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: CAT_TREND_COLORS[ci % CAT_TREND_COLORS.length] }} />
-                                {name}
-                              </span>
-                            </td>
-                            {vals.map((v, mi) => (
-                              <td key={mi} className="px-4 py-2.5 text-right text-xs tabular-nums">
-                                {v > 0 ? formatRupiah(v) : <span className="text-muted-foreground">—</span>}
-                              </td>
-                            ))}
-                            <td className={`px-4 py-2.5 text-right text-xs font-semibold tabular-nums ${deltaColor}`}>
-                              {Math.abs(deltaPct) < 1 ? '→ stabil'
-                                : `${isUp ? '▲' : '▼'} ${Math.abs(deltaPct).toFixed(0)}%`}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                {/* Category checkboxes */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-muted-foreground">Pilih kategori yang ditampilkan:</p>
+                    <div className="flex gap-2">
+                      <button
+                        className="text-xs text-primary hover:underline"
+                        onClick={() => setSelectedCatIds(new Set(allTrendCategories.map((c) => c.id)))}
+                      >
+                        Pilih Semua
+                      </button>
+                      <span className="text-muted-foreground text-xs">·</span>
+                      <button
+                        className="text-xs text-muted-foreground hover:underline"
+                        onClick={() => setSelectedCatIds(new Set())}
+                      >
+                        Hapus Semua
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {allTrendCategories.map((cat, i) => {
+                      const checked = selectedCatIds.has(cat.id)
+                      const color = CAT_TREND_COLORS[i % CAT_TREND_COLORS.length]
+                      return (
+                        <button
+                          key={cat.id}
+                          onClick={() => {
+                            setSelectedCatIds((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(cat.id)) next.delete(cat.id)
+                              else next.add(cat.id)
+                              return next
+                            })
+                          }}
+                          className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-all ${
+                            checked
+                              ? 'border-transparent text-white'
+                              : 'border-border bg-transparent text-muted-foreground hover:border-muted-foreground'
+                          }`}
+                          style={checked ? { background: color } : undefined}
+                        >
+                          <span
+                            className="inline-block w-2 h-2 rounded-full shrink-0"
+                            style={{ background: color, opacity: checked ? 0.4 : 1 }}
+                          />
+                          {cat.name}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
+
+                {activeCategoryNames.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">Pilih minimal 1 kategori</p>
+                ) : (
+                  <>
+                    <ResponsiveContainer width="100%" height={260}>
+                      <LineChart data={categoryTrendChartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.06} />
+                        <XAxis dataKey="month" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <YAxis tickFormatter={formatShort} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
+                        <Tooltip formatter={(v) => formatRupiah(Number(v))} contentStyle={{ fontSize: 12 }} />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                        {activeCategoryNames.map((name) => {
+                          const idx = allTrendCategories.findIndex((c) => c.name === name)
+                          return (
+                            <Line
+                              key={name}
+                              type="monotone"
+                              dataKey={name}
+                              stroke={CAT_TREND_COLORS[idx % CAT_TREND_COLORS.length]}
+                              strokeWidth={2}
+                              dot={{ r: 4 }}
+                              activeDot={{ r: 6 }}
+                            />
+                          )
+                        })}
+                      </LineChart>
+                    </ResponsiveContainer>
+
+                    {/* Delta table */}
+                    <div className="overflow-x-auto rounded-lg border">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b bg-muted/40">
+                            <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Kategori</th>
+                            {categoryTrendMonths.map(({ label }) => (
+                              <th key={label} className="px-4 py-2.5 text-right text-xs font-medium text-muted-foreground">{label}</th>
+                            ))}
+                            <th className="px-4 py-2.5 text-right text-xs font-medium text-muted-foreground">Δ vs 2 Bln Lalu</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeCategoryNames.map((name) => {
+                            const idx = allTrendCategories.findIndex((c) => c.name === name)
+                            const color = CAT_TREND_COLORS[idx % CAT_TREND_COLORS.length]
+                            const vals = categoryTrendMonths.map((_, mi) => {
+                              const entry = categoryTrendChartData[mi]
+                              return entry ? (entry[name] as number ?? 0) : 0
+                            })
+                            const delta = vals[2] - vals[0]
+                            const deltaPct = vals[0] !== 0 ? (delta / vals[0]) * 100 : 0
+                            const isUp = delta > 0
+                            const isExpense = breakdownType === 'expense'
+                            const deltaColor = Math.abs(deltaPct) < 1 ? 'text-muted-foreground'
+                              : (isExpense ? (isUp ? 'text-red-500' : 'text-green-600')
+                                : (isUp ? 'text-green-600' : 'text-red-500'))
+                            return (
+                              <tr key={name} className="border-b last:border-0 hover:bg-muted/20 transition-colors">
+                                <td className="px-4 py-2.5 text-xs font-medium">
+                                  <span className="flex items-center gap-1.5">
+                                    <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
+                                    {name}
+                                  </span>
+                                </td>
+                                {vals.map((v, mi) => (
+                                  <td key={mi} className="px-4 py-2.5 text-right text-xs tabular-nums">
+                                    {v > 0 ? formatRupiah(v) : <span className="text-muted-foreground">—</span>}
+                                  </td>
+                                ))}
+                                <td className={`px-4 py-2.5 text-right text-xs font-semibold tabular-nums ${deltaColor}`}>
+                                  {Math.abs(deltaPct) < 1 ? '→ stabil'
+                                    : `${isUp ? '▲' : '▼'} ${Math.abs(deltaPct).toFixed(0)}%`}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </CardContent>
